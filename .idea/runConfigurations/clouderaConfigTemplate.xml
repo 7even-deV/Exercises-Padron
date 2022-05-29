@@ -1,0 +1,31 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="clouderaConfigTemplate" type="docker-deploy" factoryName="docker-image" editBeforeRun="true" server-name="Docker">
+    <deployment type="docker-image">
+      <settings>
+        <option name="imageTag" value="cloudera/quickstart:latest" />
+        <option name="attachToContainerNeeded" value="true" />
+        <option name="command" value="/usr/bin/docker-quickstart" />
+        <option name="containerName" value="cloudera" />
+        <option name="portBindings">
+          <list>
+            <DockerPortBindingImpl>
+              <option name="containerPort" value="8888" />
+              <option name="hostPort" value="8888" />
+            </DockerPortBindingImpl>
+          </list>
+        </option>
+        <option name="commandLineOptions" value="--hostname=quickstart.cloudera --privileged=true -it" />
+        <option name="showCommandPreview" value="true" />
+        <option name="volumeBindings">
+          <list>
+            <DockerVolumeBindingImpl>
+              <option name="containerPath" value="/mnt/hdfs" />
+              <option name="hostPath" value="C:\Users\sergio.fuentes\Developer\IntelliJ\Padron\src\hostPath" />
+            </DockerVolumeBindingImpl>
+          </list>
+        </option>
+      </settings>
+    </deployment>
+    <method v="2" />
+  </configuration>
+</component>
