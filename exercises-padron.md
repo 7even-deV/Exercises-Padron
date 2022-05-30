@@ -617,6 +617,141 @@ padron_pivot.show()
     .partitionBy("desc_distrito", "desc_barrio")  
     .save("dbfs:/FileStore/shared_uploads/sergio.fuentes@bosonit.com")
 
+
+## 6- Spark con Python
+
+***6.1)*** Comenzamos realizando la misma práctica que hicimos en Hive en Spark, importando el csv. Sería recomendable intentarlo con opciones que quiten las "" de los campos, que ignoren los espacios innecesarios en los campos, que sustituyan los valores vacíos por 0 y que infiera el esquema.
+
+> import findspark  
+findspark.init()  
+  
+from pyspark.sql import SparkSession   
+from pyspark.sql.window import Window  
+from pyspark.sql.functions import *  
+  
+> spark = SparkSession.builder.getOrCreate()  
+local_route = "C:/Users/sergio.fuentes/Developer/IntelliJ/Padron/src/hostPath/"  
+file_name = "Rango_Edades_Seccion_202205.csv"  
+padron_csv = local_route + file_name  
+n_MAX = 5  
+  
+> padron = spark.read.format("csv")\  
+    .option("header", "true")\  
+    .option("inferschema", "true")\  
+    .option("emptyValue", 0)\  
+    .option("delimiter", ";")\  
+.load(padron_csv)    
+   
+> padron2 = padron.withColumn("DESC_DISTRITO", trim(col("desc_distrito")))\  
+    .withColumn("DESC_BARRIO", trim(col("desc_barrio")))   
+  
+***6.2)*** De manera alternativa también se puede importar el csv con menos tratamiento en la importación y hacer todas las modificaciones para alcanzar el mismo estado de limpieza de los datos con funciones de Spark.
+
+> padron_mal = spark.read.format("csv")\  
+    .option("header","true")\  
+    .option("inferschema","true")\  
+    .option("delimiter",";")\  
+.load(padron_csv)  
+  
+> padron_cambiado = padron_mal.na.fill(value=0)\  
+    .withColumn("DESC_DISTRITO", trim(col("desc_distrito")))\  
+    .withColumn("DESC_BARRIO", trim(col("desc_barrio")))
+
+***6.3)*** Enumera todos los barrios diferentes.
+
+> padron2.select(countDistinct("desc_barrio").alias("n_barrios")).show()
+
+***6.4)*** Crea una vista temporal de nombre "padron" y a través de ella cuenta el número de barriosdiferentes que hay.
+
+> padron_cambiado.createOrReplaceTempView("padron")  
+spark.sql("select count(distinct(desc_barrio)) as n_barrios from padron").show()
+
+***6.5)*** Crea una nueva columna que muestre la longitud de los campos de la columna DESC_DISTRITO y que se llame "longitud".
+
+> padron3 = padron_cambiado.withColumn("longitud", length(col("desc_distrito")))  
+padron3.show(n_MAX)
+
+***6.6)*** Crea una nueva columna que muestre el valor 5 para cada uno de los registros de la tabla.
+
+> padron4 = padron3.withColumn("valor5", lit(5))  
+padron4.show(n_MAX)
+
+***6.7)*** Borra esta columna.
+
+> padron5 = padron4.drop(col("valor5"))  
+padron5.show(n_MAX)
+
+***6.8)*** Particiona el DataFrame por las variables DESC_DISTRITO y DESC_BARRIO.
+
+> padron_particionado = padron5.repartition(col("DESC_DISTRITO"), col("DESC_BARRIO"))
+
+***6.9)*** Almacénalo en caché. Consulta en el puerto 4040 (UI de Spark) de tu usuario local el estado de los rdds almacenados.
+
+> padron_particionado.cache()
+
+***6.10)*** Lanza una consulta contra el DF resultante en la que muestre el número total de "espanoleshombres", "espanolesmujeres", extranjeroshombres" y "extranjerosmujeres" para cada barrio de cada distrito. Las columnas distrito y barrio deben ser las primeras en aparecer en el show. Los resultados deben estar ordenados en orden de más a menos según la columna "extranjerosmujeres" y desempatarán por la columna "extranjeroshombres".
+
+> padron_particionado.groupBy(col("desc_barrio"), col("desc_distrito"))\  
+.agg(count(col("espanolesHombres")).alias("espanolesHombres"),\  
+     count(col("espanolesMujeres")).alias("espanolesMujeres"),\  
+     count(col("extranjerosHombres")).alias("extranjerosHombres"),\  
+     count(col("extranjerosMujeres")).alias("extranjerosMujeres"))\  
+.orderBy(desc("extranjerosMujeres"), desc("extranjerosHombres"))\  
+.show(n_MAX)
+
+***6.11)*** Elimina el registro en caché.
+
+> spark.catalog.clearCache()
+
+***6.12)*** Crea un nuevo DataFrame a partir del original que muestre únicamente una columna con DESC_BARRIO, otra con DESC_DISTRITO y otra con el número total de "espanoleshombres" residentes en cada distrito de cada barrio. Únelo (con un join) con el DataFrame original a través de las columnas en común.
+
+> df1 = padron_particionado.select(col("DESC_BARRIO"), col("DESC_DISTRITO"), col("ESPANOLESHOMBRES"))\  
+    .groupBy(col("DESC_BARRIO"), col("DESC_DISTRITO"))\  
+    .agg(sum(col("ESPANOLESHOMBRES")).alias("ESPANOLESHOMBRES"))  
+  
+> res = df1.join(padron,  (padron.DESC_BARRIO == df1.DESC_BARRIO) &\  
+       (padron.DESC_DISTRITO == df1.DESC_DISTRITO), "inner")  
+res.show(n_MAX)
+
+***6.13)*** Repite la función anterior utilizando funciones de ventana. (over(Window.partitionBy.....)).
+
+> padron_ventana = padron.withColumn("TotalEspHom", sum(col("espanoleshombres"))\  
+    .over(Window.partitionBy("DESC_DISTRITO", "DESC_BARRIO")))  
+padron_ventana.show(n_MAX)
+
+***6.14)*** Mediante una función Pivot muestra una tabla (que va a ser una tabla de contingencia) que contenga los valores totales ()la suma de valores) de espanolesmujeres para cada distrito y en cada rango de edad (COD_EDAD_INT). Los distritos incluidos deben ser únicamente CENTRO, BARAJAS y RETIRO y deben figurar como columnas . El aspecto debe ser similar a este:
+
+> distritos = ("BARAJAS", "CENTRO","RETIRO")  
+  
+padron_pivot = padron_particionado\  
+    .groupBy("cod_edad_int")\  
+    .pivot("desc_distrito", distritos)\  
+    .sum("espanolesMujeres")\  
+    .orderBy(col("cod_edad_int"))  
+  
+padron_pivot.show(n_MAX)
+
+***6.15)*** Utilizando este nuevo DF, crea 3 columnas nuevas que hagan referencia a qué porcentaje de la suma de "espanolesmujeres" en los tres distritos para cada rango de edad representa cada uno de los tres distritos. Debe estar redondeada a 2 decimales. Puedes imponerte la condición extra de no apoyarte en ninguna columna auxiliar creada para el caso.
+
+> padron_porcen = padron_pivot.withColumn("porcentaje_barajas", round(col("barajas") / (col("barajas") + col("centro") + col("retiro")) * 100, 2))\  
+    .withColumn("porcentaje_centro", round(col("centro") / (col("barajas") + col("CENTRO") + col("RETIRO")) * 100, 2))\  
+    .withColumn("porcentaje_retiro", round(col("retiro") / (col("BARAJAS") + col("CENTRO") + col("RETIRO")) * 100, 2))
+
+***6.16)*** Guarda el archivo csv original particionado por distrito y por barrio (en ese orden) en un directorio local. Consulta el directorio para ver la estructura de los ficheros y comprueba que es la esperada.
+
+> padron.write.format("csv")\  
+    .option("header", "True")\  
+    .mode("overwrite")\  
+    .partitionBy("desc_distrito", "desc_barrio")\  
+    .save(local_route + "saveCSV")
+
+***6.17)*** Haz el mismo guardado pero en formato parquet. Compara el peso del archivo con el resultado anterior.
+
+> padron.write.format("parquet")\  
+    .mode("overwrite")\  
+    .partitionBy("desc_distrito", "desc_barrio")\  
+    .save(local_route + "saveCSV")
+
 ## 7- Spark y Hive
 
 ***7.1)*** Por último, prueba a hacer los ejercicios sugeridos en la parte de Hive con el csv "Datos Padrón" (incluyendo la importación con Regex) utilizando desde Spark EXCLUSIVAMENTE sentencias spark.sql, es decir, importar los archivos desde local directamente como tablas de Hive y haciendo todas las consultas sobre estas tablas sin transformarlas en ningún momento en DataFrames ni DataSets.  
@@ -625,7 +760,7 @@ padron_pivot.show()
 
 ***7.1.1)*** Crear Base de datos "datos_padron"  
 
-> spark.sql("CREATE DATABASE datos_padron")
+> val db = spark.sql("CREATE DATABASE datos_padron")
 
 ***7.1.2)***  Crear la tabla de datos padron_txt con todos los campos del fichero CSV y cargar los
 datos mediante el comando LOAD DATA LOCAL INPATH. La tabla tendrá formato
